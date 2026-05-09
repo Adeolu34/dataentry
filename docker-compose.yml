@@ -1,0 +1,95 @@
+version: "3.9"
+
+services:
+  app:
+    build: .
+    container_name: data_entry_bot_app
+    ports:
+      - "8006:8006"
+    env_file:
+      - .env
+    volumes:
+      - ./input_files:/app/input_files
+      - ./receipts:/app/receipts
+      - ./screenshots:/app/screenshots
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8006 --reload
+    restart: unless-stopped
+
+  worker:
+    build: .
+    container_name: data_entry_bot_worker
+    env_file:
+      - .env
+    volumes:
+      - ./input_files:/app/input_files
+      - ./receipts:/app/receipts
+      - ./screenshots:/app/screenshots
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    command: celery -A app.tasks.celery_app.celery_app worker --loglevel=info --concurrency=2
+    restart: unless-stopped
+
+  beat:
+    build: .
+    container_name: data_entry_bot_beat
+    env_file:
+      - .env
+    depends_on:
+      - redis
+      - postgres
+    command: celery -A app.tasks.celery_app.celery_app beat --loglevel=info
+    restart: unless-stopped
+
+  flower:
+    build: .
+    container_name: data_entry_bot_flower
+    env_file:
+      - .env
+    ports:
+      - "5556:5556"
+    depends_on:
+      - redis
+      - worker
+    command: celery -A app.tasks.celery_app.celery_app flower --port=5556
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    container_name: data_entry_bot_redis
+    ports:
+      - "6380:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: data_entry_bot_postgres
+    environment:
+      POSTGRES_DB: data_entry_bot
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "5433:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
